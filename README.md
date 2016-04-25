@@ -1,0 +1,3 @@
+# Tiercel
+
+Telegram <-> IRC bridge
