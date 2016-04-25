@@ -1,0 +1,10 @@
+[package]
+name = "tgirc"
+version = "0.1.0"
+authors = ["Porter Smith <flowbish@gmail.com>"]
+
+[dependencies]
+irc = "^0.11.3"
+telegram-bot = "^0.4"
+toml = "^0.1.28"
+rustc-serialize = "*"
