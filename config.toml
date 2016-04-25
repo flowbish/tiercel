@@ -1,0 +1,17 @@
+# Rust bot token, acquired from BotFather
+token = ""
+
+[maps]
+# Telegram group name = IRC channel
+"rust-tiercel" = "#rust-tiercel"
+
+[irc]
+server = "irc.freenode.net"
+port = 6697
+use_ssl = true
+# Username and password are required for SASL login
+username = "tiercel"
+password = "*******"
+realname = "tiercel"
+nickname = "tiercel"
+alt_nicks = ["tiercel_", "tiercel__"]
