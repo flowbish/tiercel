@@ -29,7 +29,6 @@ struct RelayState {
     irc_channel: HashMap<TelegramGroup, IrcChannel>,
     // Map from Telegram group name to chat_id
     chat_ids: HashMap<TelegramGroup, ChatID>,
-    config: Config,
 }
 
 #[derive(Clone, Default, RustcDecodable, Debug)]
@@ -37,6 +36,7 @@ struct Config {
     pub irc: irc::client::data::Config,
     pub token: String,
     pub maps: HashMap<TelegramGroup, IrcChannel>,
+    pub debug: Option<bool>,
 }
 
 fn format_tg_nick(user: &User) -> String {
@@ -103,13 +103,18 @@ fn save_chat_ids(path: &str, chat_ids: &HashMap<TelegramGroup, ChatID>) {
     file.write_all(toml::encode_str(&chat_ids).as_bytes()).unwrap();
 }
 
-fn handle_irc<T: ServerExt>(irc: T, tg: Arc<Api>, state: Arc<Mutex<RelayState>>) {
+fn handle_irc<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mutex<RelayState>>) {
     let tg = tg.clone();
     for message in irc.iter() {
         match message {
             Ok(msg) => {
                 // Acquire lock of shared state
                 let state = state.lock().unwrap();
+
+                // Debug print any messages from server
+                if config.debug.unwrap_or(false) {
+                    println!("[DEBUG] {}", msg.to_string());
+                }
 
                 // The following conditions must be met in order for a message to be relayed.
                 // 1. We must be receiving a PRIVMSG
@@ -147,13 +152,13 @@ fn handle_irc<T: ServerExt>(irc: T, tg: Arc<Api>, state: Arc<Mutex<RelayState>>)
                 }
             }
             Err(err) => {
-                println!("IRC error: {}", err);
+                println!("[ERROR] IRC error: {}", err);
             }
         }
     }
 }
 
-fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, state: Arc<Mutex<RelayState>>) {
+fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mutex<RelayState>>) {
     let tg = tg.clone();
     let mut listener = tg.listener(ListeningMethod::LongPoll(None));
 
@@ -163,6 +168,11 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, state: Arc<Mutex<RelayState>>) 
         // Check for message in received update
         if let Some(m) = u.message {
             let mut state = state.lock().unwrap();
+
+            // Debug print any messages from server
+            if config.debug.unwrap_or(false) {
+                println!("[DEBUG] {:?}", m);
+            }
 
             // The following conditions must be met in order for a message to be relayed.
             // 1. We must be receiving a message from a group (handle channels in the future?)
@@ -243,7 +253,6 @@ fn main() {
         tg_group: tg_group,
         irc_channel: irc_channel,
         chat_ids: chat_ids,
-        config: config,
     }));
 
     println!("[INFO] Telegram username: @{}", me.username.unwrap());
@@ -253,14 +262,16 @@ fn main() {
     let irc_handle = {
         let client = client.clone();
         let api = arc_tg.clone();
+        let config = config.clone();
         let state = state.clone();
-        spawn(move || handle_irc(client, api, state))
+        spawn(move || handle_irc(client, api, config, state))
     };
     let tg_handle = {
         let client = client.clone();
         let api = arc_tg.clone();
+        let config = config.clone();
         let state = state.clone();
-        spawn(move || handle_tg(client, api, state))
+        spawn(move || handle_tg(client, api, config, state))
     };
 
     // Clean up threads. This should probably never need to be run, as this would imply
