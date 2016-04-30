@@ -1,16 +1,22 @@
 extern crate irc;
 extern crate telegram_bot;
 extern crate toml;
+extern crate hyper;
 extern crate rustc_serialize;
 
 use std::default::Default;
 use std::thread::spawn;
 use std::fs::File;
+use std::io;
 use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::collections::hash_map::{HashMap, Entry};
+use std::path::{Path,PathBuf};
 use irc::client::prelude::{IrcServer, ServerExt};
 use rustc_serialize::Decodable;
+use hyper::Url;
+use hyper::method::Method;
+use hyper::client::{Request};
 use telegram_bot::{Api, ListeningMethod, ListeningAction};
 use telegram_bot::types::{User, MessageType};
 
@@ -37,6 +43,9 @@ struct Config {
     pub token: String,
     pub maps: HashMap<TelegramGroup, IrcChannel>,
     pub debug: Option<bool>,
+    pub relay_media: Option<bool>,
+    pub base_url: Option<Url>,
+    pub download_dir: Option<String>,
 }
 
 fn format_tg_nick(user: &User) -> String {
@@ -96,6 +105,39 @@ fn load_chat_ids(path: &str) -> HashMap<TelegramGroup, ChatID> {
                  chat_id);
     }
     mapping
+}
+
+fn download_file(url: &Url, destination: &Path, baseurl: &Url) -> io::Result<Url> {
+    // Create a request to download the file
+    let req = Request::new(Method::Get, url.clone()).unwrap();
+    let mut resp = req.start().unwrap().send().unwrap();
+
+    // Grab the last portion of the url
+    let filename = url.path().unwrap().last().unwrap();
+
+    // Create path by combining filename from url with download dir
+    let mut path = destination.to_path_buf();
+    path.push(filename);
+
+    // Open file and copy downloaded data
+    let mut file = try!(File::create(path));
+    std::io::copy(&mut resp, &mut file).unwrap();
+
+    // Create the return url that maps to this filename
+    let mut returl = baseurl.clone();
+    returl.path_mut().unwrap().push(filename.clone());
+    Ok(returl)
+}
+
+fn ensure_dir(path: &Path) {
+    let _ = std::fs::create_dir(&path);
+}
+
+fn user_path(user: &User) -> String {
+    match user.username {
+        Some(ref name) => name.clone(),
+        None => "anonymous".into()
+    }
 }
 
 fn save_chat_ids(path: &str, chat_ids: &HashMap<TelegramGroup, ChatID>) {
@@ -195,11 +237,11 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                         // Telegram channel exists in the mapping
                         Entry::Occupied(e) => {
                             let channel = e.get();
+                            let nick = format_tg_nick(&m.from);
 
                             match m.msg {
                                 MessageType::Text(t) => {
                                     // Print received text message to stdout
-                                    let nick = format_tg_nick(&m.from);
                                     let relay_msg = format!("<{nick}> {message}",
                                                             nick = nick,
                                                             message = t);
@@ -208,6 +250,40 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                              channel,
                                              relay_msg);
                                     irc.send_privmsg(channel, &relay_msg).unwrap();
+                                },
+                                MessageType::Photo(ps) => {
+                                    // Print received text message to stdout
+                                    if config.relay_media.unwrap_or(false) {
+                                        if let Some(file) = ps.last() {
+                                            let file = tg.get_file(&file.file_id).unwrap();
+                                            if let Some(path) = file.file_path {
+                                                let download_dir = PathBuf::from(config.download_dir.clone().unwrap());
+                                                let base_url = config.base_url.clone().unwrap();
+
+                                                // Create the final download directory by combining the base
+                                                // directory with the username, and ensure it exists.
+                                                let user_path = user_path(&m.from);
+                                                let download_dir_user = download_dir.join(&user_path);
+                                                ensure_dir(&download_dir_user);
+
+                                                // Create the final URL by combining the base URL and the
+                                                // username.
+                                                let base_url_user = base_url.join(&user_path).unwrap();
+                                                let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
+                                                let local_url = download_file(&tg_url, &download_dir_user, &base_url_user).unwrap();
+
+                                                // Send message to IRC
+                                                let relay_msg = format!("<{nick}> {message}",
+                                                                        nick = nick,
+                                                                        message = local_url);
+                                                println!("[INFO] Relaying \"{}\" → \"{}\": {}",
+                                                        title,
+                                                        channel,
+                                                        relay_msg);
+                                                irc.send_privmsg(channel, &relay_msg).unwrap();
+                                            }
+                                        }
+                                    }
                                 }
                                 _ => {}
                             }
@@ -230,11 +306,17 @@ fn main() {
     // Parse config file and chat IDs
     let config = load_config(CONFIG_FILE);
     let chat_ids = load_chat_ids(CHAT_IDS_FILE);
+    // Ensure that download dir exists
+    if let Some(ref download_dir) = config.download_dir {
+        ensure_dir(&PathBuf::from(download_dir));
+    }
 
     // Initialize IRC connection and identify with server
     let irc_cfg = config.irc.clone();
     let client = IrcServer::from_config(irc_cfg).expect("Could not connect to server, check configuration.");
-    client.send_sasl_plain().expect("Could not authenticate with SASL.");
+    if config.irc.password.is_some() {
+        client.send_sasl_plain().expect("Could not authenticate with SASL.");
+    }
     client.identify().expect("Could not identify to server.");
 
     // Initialize Telegram API and package into Arc
