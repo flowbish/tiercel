@@ -5,7 +5,8 @@ extern crate hyper;
 extern crate rustc_serialize;
 
 use std::default::Default;
-use std::thread::spawn;
+use std::thread;
+use std::time::Duration;
 use std::fs::File;
 use std::io;
 use std::io::{Read, Write};
@@ -340,20 +341,23 @@ fn main() {
     println!("[INFO] Telegram username: @{}", me.username.unwrap());
     println!("[INFO] IRC nick: {}", client.current_nickname());
 
+    // Wait for a little bit because IRC sucks?
+    thread::sleep(Duration::new(3, 0));
+
     // Start threads handling irc and telegram
     let irc_handle = {
         let client = client.clone();
         let api = arc_tg.clone();
         let config = config.clone();
         let state = state.clone();
-        spawn(move || handle_irc(client, api, config, state))
+        thread::spawn(move || handle_irc(client, api, config, state))
     };
     let tg_handle = {
         let client = client.clone();
         let api = arc_tg.clone();
         let config = config.clone();
         let state = state.clone();
-        spawn(move || handle_tg(client, api, config, state))
+        thread::spawn(move || handle_tg(client, api, config, state))
     };
 
     // Clean up threads. This should probably never need to be run, as this would imply
