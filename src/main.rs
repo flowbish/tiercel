@@ -205,38 +205,37 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
     let tg = tg.clone();
     let mut listener = tg.listener(ListeningMethod::LongPoll(None));
 
-    // Fetch new updates via long poll method
-    let _ = listener.listen(|u| {
+    loop {
+        // Fetch new updates via long poll method
+        let res = listener.listen(|u| {
 
-        // Check for message in received update
-        if let Some(m) = u.message {
-            let mut state = state.lock().unwrap();
+            // Check for message in received update
+            if let Some(m) = u.message {
+                let mut state = state.lock().unwrap();
 
-            // Debug print any messages from server
-            if config.debug.unwrap_or(false) {
-                println!("[DEBUG] {:?}", m);
-            }
+                // Debug print any messages from server
+                if config.debug.unwrap_or(false) {
+                    println!("[DEBUG] {:?}", m);
+                }
 
-            // The following conditions must be met in order for a message to be relayed.
-            // 1. We must be receiving a message from a group (handle channels in the future?)
-            // 2. The Telegram group in question must be present in the mapping
-
-
-            match m.chat {
-                telegram_bot::types::Chat::Group { id, title, .. } => {
-
-                    // Check if channel's id should be recorded
-                    if state.chat_ids.get(&title).is_none() {
-                        println!("[INFO] Found telegram group \"{}\" with id {}", title, id);
-                        println!("[INFO] Saving to \"{}\"", CHAT_IDS_FILE);
-                        state.chat_ids.insert(title.clone(), id);
-                        save_chat_ids(CHAT_IDS_FILE, &state.chat_ids);
-                    }
+                // The following conditions must be met in order for a message to be relayed.
+                // 1. We must be receiving a message from a group (handle channels in the future?)
+                // 2. The Telegram group in question must be present in the mapping
 
 
-                    match state.irc_channel.entry(title.clone()) {
-                        // Telegram channel exists in the mapping
-                        Entry::Occupied(e) => {
+                match m.chat {
+                    telegram_bot::types::Chat::Group { id, title, .. } => {
+
+                        // Check if channel's id should be recorded
+                        if state.chat_ids.get(&title).is_none() {
+                            println!("[INFO] Found telegram group \"{}\" with id {}", title, id);
+                            println!("[INFO] Saving to \"{}\"", CHAT_IDS_FILE);
+                            state.chat_ids.insert(title.clone(), id);
+                            save_chat_ids(CHAT_IDS_FILE, &state.chat_ids);
+                        }
+
+
+                        if let Entry::Occupied(e) = state.irc_channel.entry(title.clone()){
                             let channel = e.get();
                             let nick = format_tg_nick(&m.from);
 
@@ -247,9 +246,9 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                                             nick = nick,
                                                             message = t);
                                     println!("[INFO] Relaying \"{}\" → \"{}\": {}",
-                                             title,
-                                             channel,
-                                             relay_msg);
+                                            title,
+                                            channel,
+                                            relay_msg);
                                     irc.send_privmsg(channel, &relay_msg).unwrap();
                                 },
                                 MessageType::Photo(ps) => {
@@ -285,22 +284,23 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                             }
                                         }
                                     }
-                                }
+                                },
                                 _ => {}
                             }
                         }
-                        Entry::Vacant(_) => {
-                            // Telegram group not specified in config
-                        }
                     }
+                    _ => (),
                 }
-                _ => (),
             }
-        }
 
-        // If none of the "try!" statements returned an error: It's Ok!
-        Ok(ListeningAction::Continue)
-    });
+            // If none of the "try!" statements returned an error: It's Ok!
+            Ok(ListeningAction::Continue)
+        });
+        if let Err(e) = res {
+            println!("{}", e);
+            std::process::exit(1);
+        }
+    }
 }
 
 fn main() {
