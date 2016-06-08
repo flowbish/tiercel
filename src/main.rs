@@ -258,7 +258,7 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                             let file = tg.get_file(&file.file_id).unwrap();
                                             if let Some(path) = file.file_path {
                                                 let download_dir = PathBuf::from(config.download_dir.clone().unwrap());
-                                                let base_url = config.base_url.clone().unwrap();
+                                                let mut base_url = config.base_url.clone().unwrap();
 
                                                 // Create the final download directory by combining the base
                                                 // directory with the username, and ensure it exists.
@@ -268,9 +268,9 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
 
                                                 // Create the final URL by combining the base URL and the
                                                 // username.
-                                                let base_url_user = base_url.join(&user_path).unwrap();
+                                                base_url.path_mut().unwrap().push(user_path);
                                                 let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
-                                                let local_url = download_file(&tg_url, &download_dir_user, &base_url_user).unwrap();
+                                                let local_url = download_file(&tg_url, &download_dir_user, &base_url).unwrap();
 
                                                 // Send message to IRC
                                                 let relay_msg = format!("<{nick}> {message}",
