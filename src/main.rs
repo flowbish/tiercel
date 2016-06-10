@@ -283,6 +283,36 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                         }
                                     }
                                 },
+                                MessageType::Document(doc) => {
+                                    if config.relay_media.unwrap_or(false) {
+                                        let file = tg.get_file(&doc.file_id).unwrap();
+                                        if let Some(path) = file.file_path {
+                                            let download_dir = PathBuf::from(config.download_dir.clone().unwrap());
+                                            let mut base_url = config.base_url.clone().unwrap();
+
+                                            // Create the final download directory by combining the base
+                                            // directory with the username, and ensure it exists.
+                                            let user_path = user_path(&m.from);
+                                            let download_dir_user = download_dir.join(&user_path);
+                                            ensure_dir(&download_dir_user);
+
+                                            // Create the final URL by combining the base URL and the
+                                            // username.
+                                            base_url.path_mut().unwrap().push(user_path);
+                                            let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
+                                            let local_url = download_file(&tg_url, &download_dir_user, &base_url).unwrap();
+
+                                            let relay_msg = format!("<{nick}> {message}",
+                                                                    nick = nick,
+                                                                    message = local_url);
+                                            println!("[INFO] Relaying \"{}\" → \"{}\": {}",
+                                                    title,
+                                                    channel,
+                                                    relay_msg);
+                                            irc.send_privmsg(channel, &relay_msg).unwrap();
+                                        }
+                                    }
+                                },
                                 MessageType::Sticker(sticker) => {
                                     let message: String = if let Some(emoji) = sticker.emoji {
                                             format!("(Sticker) {}", emoji)
