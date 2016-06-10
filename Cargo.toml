@@ -11,4 +11,4 @@ rustc-serialize = "*"
 
 [dependencies.telegram-bot]
 git = "https://github.com/flowbish/telegram-bot.git"
-rev = "8570345"
+branch = "features"

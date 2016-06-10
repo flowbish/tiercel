@@ -241,7 +241,6 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
 
                             match m.msg {
                                 MessageType::Text(t) => {
-                                    // Print received text message to stdout
                                     let relay_msg = format!("<{nick}> {message}",
                                                             nick = nick,
                                                             message = t);
@@ -272,7 +271,6 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                                 let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
                                                 let local_url = download_file(&tg_url, &download_dir_user, &base_url).unwrap();
 
-                                                // Send message to IRC
                                                 let relay_msg = format!("<{nick}> {message}",
                                                                         nick = nick,
                                                                         message = local_url);
@@ -285,6 +283,22 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                                         }
                                     }
                                 },
+                                MessageType::Sticker(sticker) => {
+                                    let message: String = if let Some(emoji) = sticker.emoji {
+                                            format!("(Sticker) {}", emoji)
+                                    }
+                                    else {
+                                        "(Sticker)".into()
+                                    };
+                                    let relay_msg = format!("<{nick}> {message}",
+                                                            nick = nick,
+                                                            message = message);
+                                    println!("[INFO] Relaying \"{}\" → \"{}\": {}",
+                                             title,
+                                             channel,
+                                             relay_msg);
+                                    irc.send_privmsg(channel, &relay_msg).unwrap();
+                                }
                                 _ => {}
                             }
                         }
