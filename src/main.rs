@@ -3,6 +3,10 @@ extern crate telegram_bot;
 extern crate toml;
 extern crate hyper;
 extern crate rustc_serialize;
+extern crate regex;
+#[macro_use] extern crate lazy_static;
+
+mod types;
 
 use std::default::Default;
 use std::thread;
@@ -13,41 +17,21 @@ use std::io::{Read, Write};
 use std::sync::{Arc, Mutex};
 use std::collections::hash_map::{HashMap, Entry};
 use std::path::{Path,PathBuf};
+use std::fs;
 use irc::client::prelude::{IrcServer, ServerExt};
 use rustc_serialize::Decodable;
 use hyper::Url;
 use hyper::method::Method;
 use hyper::client::{Request};
+use regex::Regex;
 use telegram_bot::{Api, ListeningMethod, ListeningAction};
 use telegram_bot::types::{User, MessageType};
 
+use types::{Config, RelayState, ChatID, TelegramGroup, TGFile};
+use types::download_file_user;
+
 const CONFIG_FILE: &'static str = "config.toml";
 const CHAT_IDS_FILE: &'static str = "chat_ids";
-
-type ChatID = telegram_bot::types::Integer;
-type IrcChannel = String;
-type TelegramGroup = String;
-
-#[derive(Clone, Default, Debug)]
-struct RelayState {
-    // Map from IRC channel to Telegram group
-    tg_group: HashMap<IrcChannel, TelegramGroup>,
-    // Map from Telegram group to IRC channel
-    irc_channel: HashMap<TelegramGroup, IrcChannel>,
-    // Map from Telegram group name to chat_id
-    chat_ids: HashMap<TelegramGroup, ChatID>,
-}
-
-#[derive(Clone, Default, RustcDecodable, Debug)]
-struct Config {
-    pub irc: irc::client::data::Config,
-    pub token: String,
-    pub maps: HashMap<TelegramGroup, IrcChannel>,
-    pub debug: Option<bool>,
-    pub relay_media: Option<bool>,
-    pub base_url: Option<Url>,
-    pub download_dir: Option<String>,
-}
 
 fn format_tg_nick(user: &User) -> String {
     match *user {
@@ -108,37 +92,8 @@ fn load_chat_ids(path: &str) -> HashMap<TelegramGroup, ChatID> {
     mapping
 }
 
-fn download_file(url: &Url, destination: &Path, baseurl: &Url) -> io::Result<Url> {
-    // Create a request to download the file
-    let req = Request::new(Method::Get, url.clone()).unwrap();
-    let mut resp = req.start().unwrap().send().unwrap();
-
-    // Grab the last portion of the url
-    let filename = url.path().unwrap().last().unwrap();
-
-    // Create path by combining filename from url with download dir
-    let mut path = destination.to_path_buf();
-    path.push(filename);
-
-    // Open file and copy downloaded data
-    let mut file = try!(File::create(path));
-    std::io::copy(&mut resp, &mut file).unwrap();
-
-    // Create the return url that maps to this filename
-    let mut returl = baseurl.clone();
-    returl.path_mut().unwrap().push(filename.clone());
-    Ok(returl)
-}
-
 fn ensure_dir(path: &Path) {
-    let _ = std::fs::create_dir(&path);
-}
-
-fn user_path(user: &User) -> String {
-    match user.username {
-        Some(ref name) => name.clone(),
-        None => "anonymous".into()
-    }
+    let _ = fs::create_dir(&path);
 }
 
 fn save_chat_ids(path: &str, chat_ids: &HashMap<TelegramGroup, ChatID>) {
@@ -165,15 +120,15 @@ fn handle_irc<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mut
                 // 2. The IRC channel in question must be present in the mapping
                 // 3. The Telegram group associated with the channel must have a known group_id
 
+                // 1. PRIVMSG received
                 if let irc::client::data::Command::PRIVMSG(ref channel, ref t) = msg.command {
-                    // 1. PRIVMSG received
+                    // 2. Sender's nick exists
                     if let Some(ref nick) = msg.source_nickname() {
-                        // 2. Sender's nick exists
                         match state.tg_group.get(channel) {
+                            // 3. IRC channel exists in the mapping
                             Some(group) => {
-                                // 3. IRC channel exists in the mapping
+                                // 4. Telegram group_id is known, relay the message
                                 if let Some(id) = state.chat_ids.get(group) {
-                                    // 4. Telegram group_id is known, relay the message
                                     let relay_msg = format!("<{nick}> {message}",
                                                             nick = nick,
                                                             message = t);
@@ -235,102 +190,68 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
                         }
 
 
+
                         if let Entry::Occupied(e) = state.irc_channel.entry(title.clone()){
                             let channel = e.get();
                             let nick = format_tg_nick(&m.from);
+                            let mut message = String::new();
 
-                            match m.msg {
-                                MessageType::Text(t) => {
-                                    let relay_msg = format!("<{nick}> {message}",
-                                                            nick = nick,
-                                                            message = t);
-                                    println!("[INFO] Relaying \"{}\" → \"{}\": {}",
-                                            title,
-                                            channel,
-                                            relay_msg);
-                                    irc.send_privmsg(channel, &relay_msg).unwrap();
-                                },
-                                MessageType::Photo(ps) => {
-                                    // Print received text message to stdout
-                                    if config.relay_media.unwrap_or(false) {
-                                        if let Some(file) = ps.last() {
-                                            let file = tg.get_file(&file.file_id).unwrap();
+                            if config.relay_media.unwrap_or(false) {
+                                if let (&Some(ref base_url), &Some(ref download_dir)) = (&config.base_url, &config.download_dir) {
+                                    if let Some(tgfile) = TGFile::from_message(m.msg.clone()) {
+                                        if let Ok(file) = tg.get_file(&tgfile.file_id()) {
                                             if let Some(path) = file.file_path {
-                                                let download_dir = PathBuf::from(config.download_dir.clone().unwrap());
-                                                let mut base_url = config.base_url.clone().unwrap();
-
-                                                // Create the final download directory by combining the base
-                                                // directory with the username, and ensure it exists.
-                                                let user_path = user_path(&m.from);
-                                                let download_dir_user = download_dir.join(&user_path);
-                                                ensure_dir(&download_dir_user);
-
-                                                // Create the final URL by combining the base URL and the
-                                                // username.
-                                                base_url.path_mut().unwrap().push(user_path);
                                                 let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
-                                                let local_url = download_file(&tg_url, &download_dir_user, &base_url).unwrap();
-
-                                                let relay_msg = format!("<{nick}> {message}",
-                                                                        nick = nick,
-                                                                        message = local_url);
-                                                println!("[INFO] Relaying \"{}\" → \"{}\": {}",
-                                                        title,
-                                                        channel,
-                                                        relay_msg);
-                                                irc.send_privmsg(channel, &relay_msg).unwrap();
+                                                let client_url = download_file_user(&tg_url, &m.from, &Path::new(&download_dir), &base_url).unwrap();
+                                                message.push_str(&client_url.serialize());
                                             }
                                         }
                                     }
-                                },
-                                MessageType::Document(doc) => {
-                                    if config.relay_media.unwrap_or(false) {
-                                        let file = tg.get_file(&doc.file_id).unwrap();
-                                        if let Some(path) = file.file_path {
-                                            let download_dir = PathBuf::from(config.download_dir.clone().unwrap());
-                                            let mut base_url = config.base_url.clone().unwrap();
+                                }
+                            }
 
-                                            // Create the final download directory by combining the base
-                                            // directory with the username, and ensure it exists.
-                                            let user_path = user_path(&m.from);
-                                            let download_dir_user = download_dir.join(&user_path);
-                                            ensure_dir(&download_dir_user);
-
-                                            // Create the final URL by combining the base URL and the
-                                            // username.
-                                            base_url.path_mut().unwrap().push(user_path);
-                                            let tg_url = Url::parse(&tg.get_file_url(&path)).unwrap();
-                                            let local_url = download_file(&tg_url, &download_dir_user, &base_url).unwrap();
-
-                                            let relay_msg = format!("<{nick}> {message}",
-                                                                    nick = nick,
-                                                                    message = local_url);
-                                            println!("[INFO] Relaying \"{}\" → \"{}\": {}",
-                                                    title,
-                                                    channel,
-                                                    relay_msg);
-                                            irc.send_privmsg(channel, &relay_msg).unwrap();
-                                        }
-                                    }
+                            match m.msg {
+                                MessageType::Text(t) => {
+                                    message.push_str(&t);
                                 },
                                 MessageType::Sticker(sticker) => {
-                                    let message: String = if let Some(emoji) = sticker.emoji {
-                                            format!("(Sticker) {}", emoji)
-                                    }
-                                    else {
+                                    let sticker_msg = if let Some(emoji) = sticker.emoji {
+                                        format!("(Sticker) {}", emoji)
+                                    } else {
                                         "(Sticker)".into()
                                     };
-                                    let relay_msg = format!("<{nick}> {message}",
-                                                            nick = nick,
-                                                            message = message);
-                                    println!("[INFO] Relaying \"{}\" → \"{}\": {}",
-                                             title,
-                                             channel,
-                                             relay_msg);
-                                    irc.send_privmsg(channel, &relay_msg).unwrap();
+                                    message.push_str(&sticker_msg);
                                 }
                                 _ => {}
                             }
+
+                            // Handle replies
+                            if let Some(msg) = m.reply {
+                                if tg.get_me().map(|u| u == msg.from).unwrap_or(false) {
+                                    if let MessageType::Text(t) = msg.msg {
+                                        lazy_static! {
+                                            static ref RE: Regex = Regex::new("^<([^>]+)>").unwrap();
+                                        }
+                                        for username in RE.captures(&t) {
+                                            if let Some(username) = username.at(1) {
+                                                message = format!("{}: {}", username, message);
+                                            }
+                                        }
+                                    }
+                                } else {
+                                    message = format!("{}: {}", format_tg_nick(&msg.from), message);
+                                }
+                            }
+
+                            // Relay the message
+                            let relay_msg = format!("<{nick}> {message}",
+                                                    nick = nick,
+                                                    message = message);
+                            println!("[INFO] Relaying \"{}\" → \"{}\": {}",
+                                     title,
+                                     channel,
+                                     relay_msg);
+                            irc.send_privmsg(channel, &relay_msg).unwrap();
                         }
                     }
                     _ => (),
@@ -342,7 +263,7 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
         });
         if let Err(e) = res {
             println!("{}", e);
-            std::process::exit(1);
+            thread::sleep(Duration::new(10, 0));
         }
     }
 }
@@ -376,11 +297,7 @@ fn main() {
     let tg_group = config.maps.iter().map(|(k, v)| (v.clone(), k.clone())).collect();
 
     // Initialize shared state
-    let state = Arc::new(Mutex::new(RelayState {
-        tg_group: tg_group,
-        irc_channel: irc_channel,
-        chat_ids: chat_ids,
-    }));
+    let state = Arc::new(Mutex::new(RelayState::new(tg_group, irc_channel, chat_ids)));
 
     println!("[INFO] Telegram username: @{}", me.username.unwrap());
     println!("[INFO] IRC nick: {}", client.current_nickname());
