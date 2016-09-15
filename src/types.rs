@@ -10,6 +10,7 @@ use hyper::Url;
 use hyper::method::Method;
 use hyper::client::Request;
 use telegram_bot::types::{User, MessageType, Integer};
+use error::Result;
 
 pub type ChatID = Integer;
 pub type IrcChannel = String;
@@ -107,7 +108,7 @@ fn file_id_size(msg: MessageType) -> Option<(String, Option<Integer>)> {
     }
 }
 
-pub  fn download_file_user(url: &Url, user: &User, base_download_dir: &Path, base_url: &Url) -> io::Result<Url> {
+pub  fn download_file_user(url: &Url, user: &User, base_download_dir: &Path, base_url: &Url) -> Result<Url> {
     // Create the final download directory by combining the base
     // directory with the username, and ensure it exists.
     let base_user_path = user_path(&user, base_download_dir);
@@ -132,7 +133,7 @@ fn replace_filename(filename: &str, name: &str) -> String {
     }
 }
 
-fn download_to_file(url: &Url, destination: &Path) -> io::Result<()>{
+fn download_to_file(url: &Url, destination: &Path) -> Result<()>{
     // Create a request to download the file
     let req = Request::new(Method::Get, url.clone()).unwrap();
     let mut resp = req.start().unwrap().send().unwrap();
@@ -144,7 +145,7 @@ fn download_to_file(url: &Url, destination: &Path) -> io::Result<()>{
     Ok(())
 }
 
-fn download_file(url: &Url, destination: &Path, baseurl: &Url) -> io::Result<Url> {
+fn download_file(url: &Url, destination: &Path, baseurl: &Url) -> Result<Url> {
     // Grab the last portion of the url
     let filename = url.path().unwrap().last().unwrap();
 

@@ -7,6 +7,7 @@ extern crate regex;
 #[macro_use] extern crate lazy_static;
 
 mod types;
+mod error;
 
 use std::default::Default;
 use std::thread;
