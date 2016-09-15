@@ -1,1 +1,4 @@
 target
+
+# File used to persist chat IDs across sessions, don't want this being committed
+chat_ids
