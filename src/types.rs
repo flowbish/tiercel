@@ -1,20 +1,14 @@
 extern crate rand;
 
 use self::rand::{Rng, thread_rng};
-use std::sync::mpsc::{Sender, Receiver};
-use std::sync::mpsc;
-use std::thread;
-use std::time::Duration;
 use std::path::{Path,PathBuf};
 use std::fs::File;
-use std::env::var;
 use std::collections::{HashMap, VecDeque};
-use std::sync::{Arc, Mutex};
-use std::io;
 use std::fs;
+use std::io;
 use hyper::Url;
 use hyper::method::Method;
-use hyper::client::{Request};
+use hyper::client::Request;
 use telegram_bot::types::{User, MessageType, Integer};
 
 pub type ChatID = Integer;
@@ -31,7 +25,6 @@ pub struct RelayState {
     pub chat_ids: HashMap<TelegramGroup, ChatID>,
     // Queue for messages in the Telegram -> Irc direction
     irc_message_queue: VecDeque<String>,
-    // irc_message_thread: thread::JoinHandle<()>,
 }
 
 impl RelayState {
@@ -43,12 +36,9 @@ impl RelayState {
             irc_channel: irc_channel,
             chat_ids: chat_ids,
             irc_message_queue: VecDeque::new(),
-            // irc_message_thread: thread::spawn(move|| {
-            //     thread::sleep(Duration::from_millis(2000));
-            //     println!("test");
-            // })
         }
     }
+
     pub fn send_message_irc(&mut self, msg: String) {
         self.irc_message_queue.push_back(msg)
     }
