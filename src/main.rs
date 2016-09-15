@@ -149,6 +149,7 @@ fn handle_irc<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mut
             }
             Err(err) => {
                 println!("[ERROR] IRC error: {}", err);
+                thread::sleep(Duration::new(10, 0));
             }
         }
     }
@@ -259,8 +260,8 @@ fn handle_tg<T: ServerExt>(irc: T, tg: Arc<Api>, config: Config, state: Arc<Mute
             // If none of the "try!" statements returned an error: It's Ok!
             Ok(ListeningAction::Continue)
         });
-        if let Err(e) = res {
-            println!("{}", e);
+        if let Err(err) = res {
+            println!("[ERROR] Telegram error: {}", err);
             thread::sleep(Duration::new(10, 0));
         }
     }
