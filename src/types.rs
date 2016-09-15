@@ -135,8 +135,9 @@ fn replace_filename(filename: &str, name: &str) -> String {
 
 fn download_to_file(url: &Url, destination: &Path) -> Result<()>{
     // Create a request to download the file
-    let req = Request::new(Method::Get, url.clone()).unwrap();
-    let mut resp = req.start().unwrap().send().unwrap();
+    let req = try!(Request::new(Method::Get, url.clone()));
+    let req = try!(req.start());
+    let mut resp = try!(req.send());
 
     // Open file and copy downloaded data
     let mut file = try!(File::create(destination));
